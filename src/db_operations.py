@@ -27,14 +27,12 @@ def get_column_definitions(df):
         'Round': 'INTEGER',
         'Player': 'VARCHAR(100)',
         'Team': 'VARCHAR(50)',
-        'Age': 'INTEGER',
         'POS1': 'VARCHAR(10)',
         'POS2': 'VARCHAR(10)',
         'Price': 'DECIMAL(12,2)',
         'Priced_at': 'DECIMAL(12,4)',
-        'PTS': 'DECIMAL(12,2)',
-        'Total_base': 'DECIMAL(12,2)',
-        'Base_exceeds_price_premium': 'DECIMAL(12,4)'
+        'Diff': 'DECIMAL(12,2)',
+        'Projection': 'DECIMAL(12,2)'
     }
     
     # Default type for any column not explicitly defined
@@ -72,10 +70,10 @@ def import_excel_data(excel_file_path):
         print(f"- '{col}'")
     
     # Define the required columns using exact names from Excel
+    # Updated to include new columns and remove old ones that are no longer needed
     required_columns = [
-        'Round', 'Player', 'Team', 'Age', 'POS1', 'POS2',
-        'Price', 'Priced at', 'PTS', 'Total base',
-        'Base exceeds price premium'
+        'Round', 'Player', 'Team', 'POS1', 'POS2',
+        'Price', 'Priced at', 'Diff', 'Projection'
     ]
     
     # Filter DataFrame to include only required columns
@@ -92,8 +90,7 @@ def import_excel_data(excel_file_path):
     df.columns = [col.strip().replace(' ', '_') for col in df.columns]
     
     # Convert numeric columns to appropriate types and handle NaN values
-    numeric_columns = ['Round', 'Age', 'Price', 'Priced_at', 'PTS', 
-                      'Total_base', 'Base_exceeds_price_premium']
+    numeric_columns = ['Round', 'Price', 'Priced_at', 'Diff', 'Projection']
     
     for col in numeric_columns:
         if col in df.columns:
