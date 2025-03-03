@@ -54,35 +54,9 @@ def load_data() -> pd.DataFrame:
             # Now fetch the actual data
             query = "SELECT * FROM player_stats;"
             df = pd.read_sql(query, connection)
-            
-            
-        # Updated column mapping to match the database column names
-        column_mapping = {
-            'Base_exceeds_price_premium': 'Base exceeds price premium',
-            'Total_base': 'Total base',
-            'POS1': 'POS1',  # These don't need to change but included for clarity
-            'Round': 'Round',
-            'Team': 'Team',
-            'Player': 'Player',
-            'Age': 'Age',
-            'Price': 'Price',
-            'POS2': 'POS2'
-        }
-        
-        # Only rename columns that exist in both the DataFrame and mapping
-        existing_columns = {k: v for k, v in column_mapping.items() if k in df.columns}
-        df.rename(columns=existing_columns, inplace=True)
-        
-        # Clean numeric columns
-        numeric_columns = ['Base exceeds price premium', 'Total base', 'Price']
-        for col in numeric_columns:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col].fillna(0), errors='coerce').fillna(0)
-        
         
         # Ensure required columns exist
-        required_columns = ['Round', 'Team', 'POS1', 'Player', 'Price', 
-                          'Base exceeds price premium', 'Total base', 'Age']
+        required_columns = ['Round', 'Team', 'POS1', 'Player', 'Price', 'Diff', 'Projection']
         missing_columns = [col for col in required_columns if col not in df.columns]
         if missing_columns:
             raise ValueError(f"Missing required columns: {', '.join(missing_columns)}")
@@ -408,75 +382,101 @@ def print_players_by_rule_level(available_players: pd.DataFrame, consolidated_da
                 )
                 print(f"BPRE by Round: {bpre_values}")
 
-def generate_comprehensive_trade_options(
-    priority_groups, 
-    salary_freed, 
-    maximize_base=False, 
-    hybrid_approach=False, 
-    max_options=10,
-    trade_type='likeForLike',
-    traded_out_positions=None,
-    num_players_needed=2
-):
+def generate_trade_options(
+    available_players: pd.DataFrame,
+    salary_freed: float,
+    maximize_base: bool = False,
+    hybrid_approach: bool = False,
+    max_options: int = 10,
+    trade_type: str = 'likeForLike',
+    traded_out_positions: List[str] = None,
+    num_players_needed: int = 2
+) -> List[Dict]:
     """
     Generate trade combinations based on selected optimization strategy while ensuring
     position requirements are met for both like-for-like and positional swap trades.
+    
+    Uses Diff for value maximization and Projection for base maximization.
     """
     valid_combinations = []
     used_players = set()
     
-    # Filter players by position if positions are specified
-    if traded_out_positions:
-        position_filtered_groups = {}
-        for level in priority_groups:
-            position_filtered_groups[level] = [
-                player for player in priority_groups[level]
-                if player['POS1'] in traded_out_positions or 
-                (pd.notna(player['POS2']) and player['POS2'] in traded_out_positions)
-            ]
-    else:
-        position_filtered_groups = priority_groups
+    # Make a copy to avoid modifying the original DataFrame
+    players_df = available_players.copy()
+    
+    # Ensure numeric columns are properly typed
+    numeric_columns = ['Price', 'Diff', 'Projection']
+    for col in numeric_columns:
+        if col in players_df.columns:
+            players_df[col] = pd.to_numeric(players_df[col], errors='coerce').fillna(0)
+    
+    # Convert DataFrame to list of dictionaries for easier manipulation
+    players = players_df.to_dict('records')
+    
+    # Create a position mapping for each player
+    position_mapping = {}
+    for player in players:
+        positions = [player['POS1']]
+        if pd.notna(player.get('POS2')):
+            positions.append(player['POS2'])
+        position_mapping[player['Player']] = positions
+    
+    # Function to check if a player has at least one position from the required positions
+    def has_valid_position(player, valid_positions):
+        player_positions = position_mapping[player['Player']]
+        return any(pos in valid_positions for pos in player_positions)
+    
+    # Function to check if a player combination works for like-for-like
+    def is_valid_like_for_like_combo(player_combo):
+        if not traded_out_positions or trade_type != 'likeForLike':
+            return True
+            
+        # First check: each player must have at least one valid position
+        if not all(has_valid_position(player, traded_out_positions) for player in player_combo):
+            return False
+            
+        # Second check: all required positions must be covered
+        positions_covered = set()
+        for player in player_combo:
+            for pos in position_mapping[player['Player']]:
+                if pos in traded_out_positions:
+                    positions_covered.add(pos)
         
+        return set(traded_out_positions) == positions_covered
+    
     if maximize_base:
-        # Flatten and sort all players by base stats
-        flat_players = []
-        for level in sorted(position_filtered_groups.keys()):
-            flat_players.extend(position_filtered_groups[level])
-        flat_players.sort(key=lambda x: (x['avg_base'], x['avg_bpre']), reverse=True)
+        # Sort players by Projection (highest first)
+        players.sort(key=lambda x: x['Projection'], reverse=True)
         
         if num_players_needed == 1:
-            for player in flat_players:
+            for player in players:
                 if player['Player'] in used_players:
                     continue
                 
-                if player['Price'] <= salary_freed:
+                if player['Price'] <= salary_freed and is_valid_like_for_like_combo([player]):
                     combo = create_combination([player], player['Price'], salary_freed)
                     valid_combinations.append(combo)
                     used_players.add(player['Player'])
                     if len(valid_combinations) >= max_options:
                         break
         else:
-            for i in range(len(flat_players)):
-                if flat_players[i]['Player'] in used_players:
+            # For 2+ player trades, find combinations with highest total Projection
+            for i in range(len(players)):
+                if players[i]['Player'] in used_players:
                     continue
                     
-                valid_combo_found = False
-                for j in range(i + 1, len(flat_players)):
-                    if flat_players[j]['Player'] in used_players:
+                first_player = players[i]
+                
+                # Find a valid second player
+                for j in range(len(players)):
+                    if j == i or players[j]['Player'] in used_players:
                         continue
                         
-                    first_player = flat_players[i]
-                    second_player = flat_players[j]
+                    second_player = players[j]
                     
-                    # Check positions if traded_out_positions is specified and requires coverage
-                    if traded_out_positions and (trade_type == 'likeForLike' or (trade_type == 'positionalSwap' and len(traded_out_positions) == 2)):
-                        combined_positions = set()
-                        for player in [first_player, second_player]:
-                            combined_positions.add(player['POS1'])
-                            if pd.notna(player['POS2']):
-                                combined_positions.add(player['POS2'])
-                        if not set(traded_out_positions).issubset(combined_positions):
-                            continue
+                    # Check if the combination is valid for like-for-like
+                    if not is_valid_like_for_like_combo([first_player, second_player]):
+                        continue
                     
                     total_price = first_player['Price'] + second_player['Price']
                     if total_price <= salary_freed:
@@ -484,158 +484,107 @@ def generate_comprehensive_trade_options(
                         valid_combinations.append(combo)
                         used_players.add(first_player['Player'])
                         used_players.add(second_player['Player'])
-                        valid_combo_found = True
-                        break  # Exit j loop after finding a valid pair
+                        break  # Found a valid second player, move to next first player
                 
-                if valid_combo_found:
-                    if len(valid_combinations) >= max_options:
-                        break
+                if len(valid_combinations) >= max_options:
+                    break
                     
     elif hybrid_approach:
-        value_players = []
-        for level in sorted(position_filtered_groups.keys()):
-            level_players = position_filtered_groups[level]
-            level_players.sort(key=lambda x: (x['avg_bpre'], x['Base exceeds price premium']), reverse=True)
-            value_players.extend(level_players)
-        
-        base_players = []
-        for level in sorted(position_filtered_groups.keys()):
-            base_players.extend(position_filtered_groups[level])
-        base_players.sort(key=lambda x: x['avg_base'], reverse=True)
+        # Create two sorted lists
+        value_players = sorted(players, key=lambda x: x['Diff'], reverse=True)
+        projection_players = sorted(players, key=lambda x: x['Projection'], reverse=True)
         
         if num_players_needed == 1:
+            # For single player trades, prioritize value (Diff)
             for player in value_players:
                 if player['Player'] in used_players:
                     continue
                 
-                if player['Price'] <= salary_freed:
+                if player['Price'] <= salary_freed and is_valid_like_for_like_combo([player]):
                     combo = create_combination([player], player['Price'], salary_freed)
                     valid_combinations.append(combo)
                     used_players.add(player['Player'])
                     if len(valid_combinations) >= max_options:
                         break
         else:
+            # For 2+ player trades, pair a value player with a projection player
             for value_player in value_players:
-                if value_player['Player'] in used_players:
+                if value_player['Player'] in used_players or value_player['Price'] > salary_freed:
                     continue
                     
                 remaining_salary = salary_freed - value_player['Price']
                 
-                # Only apply position filtering if required by trade type
-                if traded_out_positions and (trade_type == 'likeForLike' or (trade_type == 'positionalSwap' and len(traded_out_positions) == 2)):
-                    needed_positions = [pos for pos in traded_out_positions if pos != value_player['POS1']]
-                    if needed_positions:
-                        needed_position = needed_positions[0]
-                    else:
-                        needed_position = value_player['POS1']  # Allow same position if all are the same
-                    filtered_base_players = [p for p in base_players if p['POS1'] == needed_position or 
-                                            (pd.notna(p['POS2']) and p['POS2'] == needed_position)]
-                else:
-                    filtered_base_players = base_players
-                
-                for base_player in filtered_base_players:
-                    if (base_player['Player'] not in used_players and 
-                        base_player['Player'] != value_player['Player'] and 
-                        base_player['Price'] <= remaining_salary):
+                # Find a valid projection player
+                found_match = False
+                for projection_player in projection_players:
+                    if (projection_player['Player'] not in used_players and 
+                        projection_player['Player'] != value_player['Player'] and 
+                        projection_player['Price'] <= remaining_salary):
                         
-                        combo = create_combination([value_player, base_player],
-                                                value_player['Price'] + base_player['Price'],
-                                                salary_freed)
+                        # Check if the combination is valid for like-for-like
+                        if not is_valid_like_for_like_combo([value_player, projection_player]):
+                            continue
+                        
+                        combo = create_combination(
+                            [value_player, projection_player],
+                            value_player['Price'] + projection_player['Price'],
+                            salary_freed
+                        )
                         valid_combinations.append(combo)
                         used_players.add(value_player['Player'])
-                        used_players.add(base_player['Player'])
+                        used_players.add(projection_player['Player'])
+                        found_match = True
                         break
-                        
-                if len(valid_combinations) >= max_options:
+                
+                if found_match and len(valid_combinations) >= max_options:
                     break
                     
-    else:  # maximize_value - strict rule level ordering
-        priority_levels = sorted(position_filtered_groups.keys())
+    else:  # maximize_value - use Diff
+        # Sort players by Diff (highest first)
+        players.sort(key=lambda x: x['Diff'], reverse=True)
         
-        for level in priority_levels:
-            players_in_level = position_filtered_groups[level]
-            # Update sorting to use both avg_bpre and current BPRE
-            players_in_level.sort(key=lambda x: (x['avg_bpre'], x['Base exceeds price premium']), reverse=True)
-            
-            if num_players_needed == 1:
-                for player in players_in_level:
-                    if player['Player'] in used_players:
-                        continue
-                    
-                    if player['Price'] <= salary_freed:
-                        combo = create_combination([player], player['Price'], salary_freed)
-                        valid_combinations.append(combo)
-                        used_players.add(player['Player'])
-                        if len(valid_combinations) >= max_options:
-                            break
-            else:
-                for i, first_player in enumerate(players_in_level):
-                    if first_player['Player'] in used_players:
-                        continue
-                        
-                    valid_combo_found = False
-                    
-                    # Apply position filtering only if required by trade type
-                    if traded_out_positions and (trade_type == 'likeForLike' or (trade_type == 'positionalSwap' and len(traded_out_positions) == 2)):
-                        needed_positions = [pos for pos in traded_out_positions if pos != first_player['POS1']]
-                        if needed_positions:
-                            needed_position = needed_positions[0]
-                        else:
-                            needed_position = first_player['POS1']  # Allow same position if all are the same
-                        remaining_players = [p for p in players_in_level[i+1:] if p['POS1'] == needed_position or 
-                                            (pd.notna(p['POS2']) and p['POS2'] == needed_position)]
-                    else:
-                        remaining_players = players_in_level[i+1:]
-                    
-                    # Try pairing with other players from same level
-                    for second_player in remaining_players:
-                        if second_player['Player'] not in used_players:
-                            total_price = first_player['Price'] + second_player['Price']
-                            if total_price <= salary_freed:
-                                combo = create_combination([first_player, second_player],
-                                                        total_price, salary_freed)
-                                valid_combinations.append(combo)
-                                used_players.add(first_player['Player'])
-                                used_players.add(second_player['Player'])
-                                valid_combo_found = True
-                                break
-                    
-                    if not valid_combo_found and first_player['Player'] not in used_players:
-                        # Try next levels if no valid combination found in current level
-                        for next_level in priority_levels[priority_levels.index(level)+1:]:
-                            # Apply position filtering only if required by trade type
-                            if traded_out_positions and (trade_type == 'likeForLike' or (trade_type == 'positionalSwap' and len(traded_out_positions) == 2)):
-                                needed_positions = [pos for pos in traded_out_positions if pos != first_player['POS1']]
-                                if needed_positions:
-                                    needed_position = needed_positions[0]
-                                else:
-                                    needed_position = first_player['POS1']  # Allow same position if all are the same
-                                next_level_players = [p for p in position_filtered_groups[next_level] 
-                                                    if p['POS1'] == needed_position or 
-                                                    (pd.notna(p['POS2']) and p['POS2'] == needed_position)]
-                            else:
-                                next_level_players = position_filtered_groups[next_level]
-                            
-                            for second_player in next_level_players:
-                                if second_player['Player'] not in used_players:
-                                    total_price = first_player['Price'] + second_player['Price']
-                                    if total_price <= salary_freed:
-                                        combo = create_combination([first_player, second_player],
-                                                                total_price, salary_freed)
-                                        valid_combinations.append(combo)
-                                        used_players.add(first_player['Player'])
-                                        used_players.add(second_player['Player'])
-                                        valid_combo_found = True
-                                        break
-                            
-                            if valid_combo_found:
-                                break
-                    
+        if num_players_needed == 1:
+            for player in players:
+                if player['Player'] in used_players:
+                    continue
+                
+                if player['Price'] <= salary_freed and is_valid_like_for_like_combo([player]):
+                    combo = create_combination([player], player['Price'], salary_freed)
+                    valid_combinations.append(combo)
+                    used_players.add(player['Player'])
                     if len(valid_combinations) >= max_options:
                         break
-            
-            if len(valid_combinations) >= max_options:
-                break
+        else:
+            # For 2+ player trades, find combinations with highest total Diff
+            for i in range(len(players)):
+                if players[i]['Player'] in used_players:
+                    continue
+                    
+                first_player = players[i]
+                
+                # Find a valid second player
+                found_match = False
+                for j in range(len(players)):
+                    if j == i or players[j]['Player'] in used_players:
+                        continue
+                        
+                    second_player = players[j]
+                    
+                    # Check if the combination is valid for like-for-like
+                    if not is_valid_like_for_like_combo([first_player, second_player]):
+                        continue
+                    
+                    total_price = first_player['Price'] + second_player['Price']
+                    if total_price <= salary_freed:
+                        combo = create_combination([first_player, second_player], total_price, salary_freed)
+                        valid_combinations.append(combo)
+                        used_players.add(first_player['Player'])
+                        used_players.add(second_player['Player'])
+                        found_match = True
+                        break  # Found a valid second player, move to next first player
+                
+                if found_match and len(valid_combinations) >= max_options:
+                    break
     
     return valid_combinations[:max_options]
 
@@ -644,26 +593,21 @@ def create_combination(players, total_price, salary_freed):
     return {
         'players': [create_player_dict(player) for player in players],
         'total_price': total_price,
-        'total_base': sum(player['Total base'] for player in players),
-        'total_base_premium': sum(player['Base exceeds price premium'] for player in players),
-        'salary_remaining': salary_freed - total_price,
-        'total_avg_base': sum(player['avg_base'] for player in players),
-        'combo_avg_bpre': sum(player['avg_bpre'] for player in players) / len(players)
+        'total_projection': sum(player.get('Projection', 0) for player in players),
+        'total_diff': sum(player.get('Diff', 0) for player in players),
+        'salary_remaining': salary_freed - total_price
     }
 
 def create_player_dict(player):
-    """Helper function to create consistent player dictionaries"""
+    """Helper function to create consistent player dictionary"""
     return {
         'name': player['Player'],
-        'team': player['Team'],  # Added team to player dictionary
+        'team': player['Team'],
         'position': player['POS1'],
+        'secondary_position': player.get('POS2'),
         'price': player['Price'],
-        'total_base': player['Total base'],
-        'base_premium': player['Base exceeds price premium'],
-        'consecutive_good_weeks': player['consecutive_good_weeks'],
-        'priority_level': player['priority_level'],
-        'avg_bpre': player['avg_bpre'],
-        'avg_base': player['avg_base']
+        'projection': player.get('Projection', 0),
+        'diff': player.get('Diff', 0)
     }
 
 def get_traded_out_positions(traded_out_players: List[str], consolidated_data: pd.DataFrame) -> List[str]:
@@ -786,7 +730,6 @@ def calculate_trade_options(
         positions_to_use = None
     
     latest_round = consolidated_data['Round'].max()
-    last_three_rounds = sorted(consolidated_data['Round'].unique())[-3:]
     
     # Get number of players needed based on traded out players
     num_players_needed = len(traded_out_players)
@@ -802,10 +745,9 @@ def calculate_trade_options(
     
     print(f"Total salary freed up: ${salary_freed:,}")
     
-    # Get all players who have played in any of the last 3 rounds
-    recent_players_data = consolidated_data[consolidated_data['Round'].isin(last_three_rounds)]
-    available_players = (recent_players_data[~recent_players_data['Player'].isin(traded_out_players)]
-                        .groupby('Player').last().reset_index())
+    # Get all players from the latest round
+    latest_round_data = consolidated_data[consolidated_data['Round'] == latest_round]
+    available_players = latest_round_data[~latest_round_data['Player'].isin(traded_out_players)]
     
     # Apply team list restriction first if enabled
     if team_list:
@@ -837,49 +779,9 @@ def calculate_trade_options(
             print("Warning: No players available with selected positions")
             return []
     
-    # Initialize consecutive_good_weeks column
-    available_players['consecutive_good_weeks'] = 0
-    
-    # Calculate consistency for each player
-    player_histories = {player: group.sort_values('Round') for player, group in consolidated_data.groupby('Player')}
-    
-    for idx, player in available_players.iterrows():
-        consecutive_weeks = check_consistent_performance(
-            player['Player'], 
-            consolidated_data,
-            player_histories=player_histories
-        )
-        available_players.at[idx, 'consecutive_good_weeks'] = consecutive_weeks
-    
-    # Calculate averages using all available games in last 3 rounds
-    available_players['avg_bpre'] = available_players['Player'].apply(
-        lambda x: calculate_average_bpre(x, consolidated_data, player_histories=player_histories)
-    )
-    
-    available_players['avg_base'] = available_players['Player'].apply(
-        lambda x: calculate_average_base(x, consolidated_data, min_games=min_games, player_histories=player_histories)
-    )
-
-    # Calculate priority levels
-    available_players['priority_level'] = available_players.apply(
-        lambda row: assign_priority_level(row, consolidated_data, player_histories=player_histories), 
-        axis=1
-    )
-
-    # Print players by rule level
-    print_players_by_rule_level(available_players, consolidated_data, player_histories=player_histories)
-
-    # Group players by priority level
-    priority_groups = {}
-    for _, player in available_players.iterrows():
-        level = player['priority_level']
-        if level not in priority_groups:
-            priority_groups[level] = []
-        priority_groups[level].append(player)
-
-    # Generate comprehensive trade options
-    options = generate_comprehensive_trade_options(
-        priority_groups,
+    # Generate trade options based on the selected strategy
+    options = generate_trade_options(
+        available_players,
         salary_freed,
         maximize_base,
         hybrid_approach,
@@ -1029,18 +931,18 @@ if __name__ == "__main__":
                         print(f"- {player['name']} ({player['position']})")
                         print(f"  Price: ${player['price']:,}")
                         print(f"  Current Base: {player['total_base']}")
-                        print(f"  Average Base: {player['avg_base']:.0f}")
+                        print(f"  Average Base: {player['projection']:.0f}")
                     else:
                         print(f"- {player['name']} ({player['position']})")
                         print(f"  Price: ${player['price']:,}")
-                        print(f"  Current Base Premium: {player['base_premium']}")
+                        print(f"  Current Base Premium: {player['diff']}")
                         print(f"  Consecutive Weeks above threshold: {player['consecutive_good_weeks']}")
                 
                 print(f"Total Price: ${option['total_price']:,}")
                 if maximize_base:
-                    print(f"Combined Average Base: {option['total_avg_base']:.0f}")
+                    print(f"Combined Projection: {option['total_projection']:.0f}")
                 else:
-                    print(f"Combined Base Premium: {option['total_base_premium']}")
+                    print(f"Combined Diff: {option['total_diff']:.0f}")
                 print(f"Salary Remaining: ${option['salary_remaining']:,}")
             
     except FileNotFoundError:

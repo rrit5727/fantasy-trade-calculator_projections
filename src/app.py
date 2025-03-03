@@ -20,38 +20,29 @@ CACHE_TIMEOUT = 300  # 5 minutes cache
 
 def prepare_trade_option(option: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Optimized version of prepare_trade_option with:
-    - Precomputed static keys
-    - Removed redundant type conversions
-    - Simplified player data extraction
+    Prepare trade option data for JSON response
     """
     players = []
     total_price = int(option.get('total_price', 0))
     
     # Precompute player data
     for player in option.get('players', []):
-        p = {
+        players.append({
             'name': player.get('name', ''),
-            'position': player.get('position', ''),
             'team': player.get('team', ''),
-            'price': int(player['price']),
-            'total_base': float(player['total_base']),
-            'base_premium': int(float(player['base_premium'])),
-            'consecutive_good_weeks': int(player['consecutive_good_weeks']),
-            'avg_base': float(player.get('avg_base', 0))
-        }
-        if 'priority_level' in player:
-            p['priority_level'] = int(player['priority_level'])
-        players.append(p)
-
+            'position': player.get('position', ''),
+            'secondary_position': player.get('secondary_position', ''),
+            'price': int(player.get('price', 0)),
+            'projection': float(player.get('projection', 0)),
+            'diff': float(player.get('diff', 0))
+        })
+    
     return {
         'players': players,
         'total_price': total_price,
-        'salary_remaining': int(option['salary_remaining']),
-        'total_base': float(option['total_base']),
-        'total_base_premium': float(option['total_base_premium']),
-        'total_avg_base': float(option.get('total_avg_base', 0)),
-        'combo_avg_bpre': float(option.get('combo_avg_bpre', 0))
+        'total_projection': float(option.get('total_projection', 0)),
+        'total_diff': float(option.get('total_diff', 0)),
+        'salary_remaining': int(option.get('salary_remaining', 0))
     }
 
 @app.route('/')
