@@ -49,7 +49,7 @@
         <div class="form-group">
             <label for="strategy">Strategy:</label>
             <select id="strategy" name="strategy">
-                <option value="1">Maximize value (BPRE)</option>
+                <option value="1">Maximize value</option>
                 <option value="2">Maximize Points</option>
                 <option value="3">Hybrid approach</option>
             </select>
@@ -173,7 +173,7 @@
                                             <br>
                                             ${maximize_base ? 
                                                 `Projection: ${player.projection.toFixed(1)}` : 
-                                                `Diff: ${player.diff.toFixed(1)}`
+                                                `Projected Upside: ${player.diff.toFixed(1)}`
                                             }
                                         </div>
                                     `).join('<br>')}
@@ -186,8 +186,8 @@
                                         ${maximize_base ? 
                                             `Total Projection: ${option.total_projection.toFixed(1)}` : 
                                             hybrid_approach ?
-                                                `Total Diff: ${option.total_diff.toFixed(1)}<br>Total Projection: ${option.total_projection.toFixed(1)}` :
-                                                `Total Diff: ${option.total_diff.toFixed(1)}`
+                                                `Total projected Upside: ${option.total_diff.toFixed(1)}<br>Total Projection: ${option.total_projection.toFixed(1)}` :
+                                                `Total projected Upside: ${option.total_diff.toFixed(1)}`
                                         }
                                     </div>
                                 </div>
@@ -342,7 +342,7 @@
                                             <br>
                                             ${maximize_base ? 
                                                 `Projection: ${player.projection.toFixed(1)}` : 
-                                                `Diff: ${player.diff.toFixed(1)}`
+                                                `projected Upside: ${player.diff.toFixed(1)}`
                                             }
                                         </div>
                                     `).join('<br>')}
@@ -355,8 +355,8 @@
                                         ${maximize_base ? 
                                             `Total Projection: ${option.total_projection.toFixed(1)}` : 
                                             hybrid_approach ?
-                                                `Total Diff: ${option.total_diff.toFixed(1)}<br>Total Projection: ${option.total_projection.toFixed(1)}` :
-                                                `Total Diff: ${option.total_diff.toFixed(1)}`
+                                                `Total projected Upside: ${option.total_diff.toFixed(1)}<br>Total Projection: ${option.total_projection.toFixed(1)}` :
+                                                `Total projected Upside: ${option.total_diff.toFixed(1)}`
                                         }
                                     </div>
                                 </div>
